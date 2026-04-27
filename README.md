@@ -11,7 +11,7 @@ I'm currently looking for Summer 2026 Software Engineering internships, especial
 | Project | Tech Stack | What it shows |
 |---|---|---|
 | [Medication & Supplement Adherence Tracker](https://github.com/abdulaz06/medication-adherence-tracker) | Flutter, FastAPI, SQLAlchemy, PostgreSQL/SQLite | Full-stack app with APIs, authentication, dose logging, scheduling, and adherence stats |
-| Return to Sender | HTML, CSS, JavaScript | Interactive email simulation game with score tracking, branching choices, and multiple endings |
+| [Return to Sender](https://github.com/AashiLila/return-to-sender) | HTML, CSS, JavaScript | Interactive email simulation game with score tracking, branching choices, and multiple endings |
 
 ## Current Focus
 
