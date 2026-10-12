@@ -1,0 +1,70 @@
+name: Profile assets
+
+on:
+  # Daily, so the activity card and the snake stay current.
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+# A push landing during the nightly run would otherwise race it to the
+# output branch.
+concurrency:
+  group: profile-assets
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      # Runs before snk on purpose: snk is a Docker action running as root,
+      # and a dist/ it created would not be writable by this step.
+      - name: Test and render the profile assets
+        run: |
+          python3 tools/test_build_assets.py
+          python3 tools/build_assets.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUT_DIR: dist
+
+      # build_assets.py skips the activity card when the GraphQL API fails.
+      # Every deploy replaces the whole output branch, so carry the last
+      # published card forward instead of letting the README image break.
+      # On the very first run there is nothing to carry, and that is fine.
+      - name: Keep the last activity card if stats were unavailable
+        run: |
+          if [ ! -f dist/activity.svg ] && git fetch --depth=1 origin output; then
+            for f in activity.svg activity-dark.svg; do
+              git show "FETCH_HEAD:$f" > "dist/$f" || rm -f "dist/$f"
+            done
+          fi
+
+      - name: Generate the contribution snake
+        uses: Platane/snk@v3
+        with:
+          github_user_name: ${{ github.repository_owner }}
+          outputs: |
+            dist/snake.svg?color_snake=#F59E0B&color_dots=#CCFBF1,#99F6E4,#5EEAD4,#14B8A6,#0F766E
+            dist/snake-dark.svg?color_snake=#F59E0B&color_dots=#0B1F3A,#134E4A,#0F766E,#14B8A6,#5EEAD4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to the output branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: output
+          # One commit, replaced each run, so a daily snake does not grow the
+          # repository forever.
+          force_orphan: true
+          commit_message: "Update profile assets [skip ci]"
