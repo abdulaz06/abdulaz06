@@ -25,7 +25,7 @@ TODAY = date(2026, 10, 12)
 LIGHT, DARK = b.THEMES[""], b.THEMES["-dark"]
 
 SAMPLE_STATS = {
-    "total": 1204, "commits": 873, "stars": 12, "repos": 6, "prs": 41,
+    "total": 1204, "commits": 873, "stars": 12, "repos": 6, "active": 187,
     "current": b.Streak(4, date(2026, 10, 9), TODAY),
     "longest": b.Streak(19, date(2025, 12, 28), date(2026, 1, 15)),
     "since": date(2024, 10, 15), "today": TODAY,
@@ -377,11 +377,12 @@ def test_activity_card_fits():
 
 
 def test_fetch_stats_offline():
-    """Pagination, one request for every year, public-only, and the maths."""
+    """Pagination, one request for every year, public-only, the profile
+    repository left out of the language mix, and the maths."""
     calls = []
 
-    def repo(stars, *langs):
-        return {"stargazerCount": stars, "languages": {"edges": [
+    def repo(name, stars, *langs):
+        return {"name": name, "stargazerCount": stars, "languages": {"edges": [
             {"size": size, "node": {"name": n, "color": c}} for n, size, c in langs]}}
 
     def day_list(year):
@@ -393,15 +394,16 @@ def test_fetch_stats_offline():
         calls.append(query)
         if "repositories" in query:
             assert "privacy: PUBLIC" in query and "isFork: false" in query
+            assert "pullRequests" not in query
             first = variables["after"] is None
             return {"user": {
                 "createdAt": "2024-10-15T21:22:45Z",
-                "pullRequests": {"totalCount": 5},
                 "repositories": {
-                    "totalCount": 3,
+                    "totalCount": 4,
                     "pageInfo": {"hasNextPage": first, "endCursor": "abc"},
-                    "nodes": ([repo(2, ("Rust", 300, "#dea584"), ("GLSL", 100, None))]
-                              if first else [repo(1, ("Python", 600, "#3572A5"))])}}}
+                    "nodes": ([repo("sonora", 2, ("Rust", 300, "#dea584"), ("GLSL", 100, None)),
+                               repo(b.USER, 1, ("Python", 90000, "#3572A5"))]
+                              if first else [repo("app", 1, ("Python", 600, "#3572A5"))])}}}
         years = re.findall(r"y(\d{4}): contributionsCollection", query)
         assert years == ["2024", "2025", "2026"], years
         assert '"2024-10-15T00:00:00Z"' in query and '"2026-10-12T23:59:59Z"' in query
@@ -412,7 +414,8 @@ def test_fetch_stats_offline():
 
     s = b.fetch_stats(fake, TODAY)
     assert len(calls) == 3, "expected 2 profile pages + 1 calendar request"
-    assert (s["total"], s["commits"], s["stars"], s["prs"], s["repos"]) == (60, 30, 3, 5, 3)
+    assert (s["total"], s["commits"], s["stars"], s["repos"]) == (60, 30, 4, 4)
+    assert s["active"] == 4, "only days inside the last year count"
     assert s["current"] == b.Streak(4, date(2026, 10, 8), date(2026, 10, 11))
     assert s["longest"].length == 9
     assert [n for n, _, _ in s["languages"]] == ["Python", "Rust", "GLSL"]

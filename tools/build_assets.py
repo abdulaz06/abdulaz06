@@ -551,12 +551,12 @@ PROFILE_Q = """
 query($login: String!, $after: String) {
   user(login: $login) {
     createdAt
-    pullRequests { totalCount }
     repositories(first: 100, after: $after, ownerAffiliations: OWNER,
                  isFork: false, privacy: PUBLIC) {
       totalCount
       pageInfo { hasNextPage endCursor }
       nodes {
+        name
         stargazerCount
         languages(first: 12, orderBy: {field: SIZE, direction: DESC}) {
           edges { size node { name color } }
@@ -635,6 +635,10 @@ def fetch_stats(query=graphql, today=None):
     privacy: PUBLIC keeps private repositories out whoever's token runs this,
     so a local build shows what the workflow will publish. Two requests in
     the common case: the profile, then every year's calendar at once.
+
+    There is no pull-request count: GitHub's total includes PRs in private
+    repositories for some tokens and not others, so the card would disagree
+    with itself. Active days come from the calendar already fetched.
     """
     today = today or date.today()
     repos, after = [], None
@@ -658,6 +662,8 @@ def fetch_stats(query=graphql, today=None):
 
     sizes, colors = {}, {}
     for repo in repos:
+        if repo["name"].lower() == USER.lower():
+            continue    # this repository's own tooling is not the work it shows
         for edge in repo["languages"]["edges"]:
             name = edge["node"]["name"]
             sizes[name] = sizes.get(name, 0) + edge["size"]
@@ -666,11 +672,12 @@ def fetch_stats(query=graphql, today=None):
     top = sorted(sizes.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
 
     current, longest = streaks(days, today)
+    year_ago = (today - timedelta(days=364)).isoformat()
     return {
         "total": total, "commits": commits,
         "stars": sum(r["stargazerCount"] for r in repos),
         "repos": page["totalCount"],
-        "prs": user["pullRequests"]["totalCount"],
+        "active": sum(1 for d, n in days.items() if n > 0 and d >= year_ago),
         "current": current, "longest": longest, "since": created,
         "today": today,
         "languages": [(n, s * 100.0 / grand, colors[n]) for n, s in top],
@@ -718,9 +725,9 @@ def build_activity(p, s):
         (s["total"], "Contributions", "since " + day(s["since"]), True),
         (s["current"].length, "Current streak", span(s["current"], s["today"]), True),
         (s["longest"].length, "Longest streak", span(s["longest"], s["today"]), False),
+        (s["active"], "Active days", "in the last year", False),
         (s["commits"], "Commits", "all time", False),
         (s["stars"], "Stars earned", "across {} public repos".format(s["repos"]), False),
-        (s["prs"], "Pull requests", "opened", False),
     ]
     step = (w - 2 * pad) / float(len(cells))
     for i, (value, label, note, hot) in enumerate(cells):
