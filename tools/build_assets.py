@@ -12,13 +12,14 @@ Adapted from Chirudeva-Reddy's profile generator, with permission.
 """
 
 import json
+import math
 import os
 import sys
 import textwrap
 import urllib.error
 import urllib.request
 from datetime import date, timedelta
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from icons import brand, glyph                              # noqa: E402
@@ -158,42 +159,49 @@ def is_dark(background):
     return luminance(background) < 0.18
 
 
-def mark_colors(color, background):
-    """(fill, outline) for a brand mark on background.
+TEXT_MIN = 4.5      # WCAG AA for body text
+MARK_MIN = TEXT_MIN
+PALE = 0.4          # luminance above which a brand colour counts as pale
 
-    On a dark card a sunken mark (Rust, Angular, SQLite) is lifted toward
-    white, the way those projects draw themselves on dark, and to 4:1 rather
-    than 3:1: at the bare minimum Java and Flutter read as disabled next to
-    the brighter marks. On a light card a pale mark (JavaScript, Linux, Tauri)
-    keeps its own fill and gets a hairline in a darker shade of itself;
-    pushing the fill to 3:1 turned the yellows olive, and the yellow is how
-    people recognise them.
+
+def mark_colors(color, background):
+    """(fill, outline) for a brand mark on background, at MARK_MIN either way.
+
+    Marks are held to the same 4.5:1 as text, not WCAG's 3:1 for graphics:
+    most of these glyphs are thin line art (Java's cup, the PostgreSQL
+    elephant, GitHub Actions' nodes), and below 4.5:1 on the dark pills they
+    read as switched off.
+
+    A colour that falls short is lifted toward white on a dark pill and
+    darkened on a light one, except a pale brand on a light pill (JavaScript,
+    Linux, Tauri, React): it keeps its own fill and gets a hairline in a
+    darker shade of itself, because darkening the yellow to 4.5:1 makes it
+    olive, and the yellow is how people recognise it.
     """
-    if is_dark(background):
-        return legible(color, background, 4.0), None
-    if contrast(color, background) >= 3.0:
+    if contrast(color, background) >= MARK_MIN:
         return color.upper(), None
-    return color.upper(), legible(color, background)
+    if is_dark(background) or luminance(color) < PALE:
+        return legible(color, background, MARK_MIN), None
+    return color.upper(), legible(color, background, MARK_MIN)
 
 
 # ---------------------------------------------------------------- content --
 
 NAME = "Abdul Azeem Asharaf Ali"
-ROLE = "Software Engineer · Python · Java · Rust · SQL"
+ROLE = "Software engineer building apps and tools"
 
 TYPING_LINES = [
-    "Abdul Azeem Asharaf Ali",
     "CS + Math at UIC",
-    "Backend, systems, and data pipelines",
-    "Ports and logistics taught me what reliable means",
+    "I build apps and tools people actually use",
+    "From port operations to real-time audio",
     "Open to SWE internships and full-time roles",
 ]
-TYPING_REST = 4     # the line a renderer without SMIL shows
+TYPING_REST = 3     # the line a renderer without SMIL shows
 
 FOOTER_LINES = [
     "Thanks for scrolling this far",
     "Open to SWE internships and full-time roles",
-    "Backend, systems, and data tooling",
+    "Apps, tools, and everything behind them",
     "abdulazeemasharafali306@gmail.com",
 ]
 FOOTER_REST = 3
@@ -204,52 +212,62 @@ SOCIAL = [
     ("email", "Email", "gmail"),
 ]
 
-# (heading, [(label, Simple Icons slug)]). Colours come from icons.py. SQL has
-# no Simple Icons mark, so it is named in the prose rather than drawn here.
+# (heading, [(label, Simple Icons slug)]), apps first. Colours come from
+# icons.py; anything without a Simple Icons mark is left out, not faked.
 STACK = [
+    ("Apps and interfaces",
+     [("Flutter", "flutter"), ("React", "react"), ("Next.js", "nextdotjs"),
+      ("Angular", "angular"), ("Tauri", "tauri"), ("WebGL", "webgl")]),
     ("Languages",
-     [("Python", "python"), ("Java", "java"), ("Rust", "rust"),
-      ("TypeScript", "typescript"), ("JavaScript", "javascript"),
-      ("Dart", "dart")]),
-    ("Frameworks",
-     [("FastAPI", "fastapi"), ("Flutter", "flutter"), ("Angular", "angular"),
-      ("Tauri", "tauri"), ("Frappe", "frappe")]),
-    ("Data and tooling",
-     [("PostgreSQL", "postgresql"), ("SQLite", "sqlite"), ("WebGL", "webgl"),
-      ("Git", "git"), ("Linux", "linux"), ("GitHub Actions", "githubactions")]),
+     [("TypeScript", "typescript"), ("Python", "python"), ("Java", "java"),
+      ("Rust", "rust"), ("JavaScript", "javascript"), ("Dart", "dart")]),
+    ("Data and services",
+     [("FastAPI", "fastapi"), ("PostgreSQL", "postgresql"), ("SQLite", "sqlite"),
+      ("Frappe", "frappe"), ("Git", "git"), ("Linux", "linux"),
+      ("GitHub Actions", "githubactions")]),
 ]
 
 
 class Project(NamedTuple):
-    key: str            # asset file name: project-<key>[-dark].svg
+    key: str                # asset file name: project-<key>[-dark].svg
     name: str
-    repo: str           # github.com/USER/<repo>; every card links there
-    figure: str         # headline number, as the repo states or measures it
-    figure_label: str
+    repo: Optional[str]     # github.com/USER/<repo>; None for a private repo,
+                            # whose card the README leaves unlinked
+    status: Optional[str]   # pill in the corner in place of the link badge
+    tagline: str            # one line, accent, the same size on every card
+    what: str               # what the thing is, in a few words
     desc: str
     tags: tuple
 
 
-# Figures are checked against each repo: Sonora's FFT_SIZE and 16 ms analysis
-# loop, the vessel dashboard's measured parse-plus-render time for its
-# 50-vessel fixture, and the invoicing app's print_format fixtures.
+# Descriptions are checked against each repo's README and code. Sonora
+# captures the default or a chosen output device; the dashboard makes no
+# network requests; the invoicing app re-creates its naming rules on every
+# migrate without resetting counters, and its reverse charge is a form helper.
 PROJECTS = [
-    Project("sonora", "Sonora", "sonora",
-            "4,096-pt FFT", "Hann-windowed, ~60 analysis updates/s",
-            "Captures system audio through WASAPI loopback, analyses it in "
-            "Rust, and drives three WebGL 2 scenes with bloom.",
+    Project("berthiq", "BerthIQ", None, "in progress",
+            "Test-drive the port first", "Port-call operations tool",
+            "Finds where vessels get stuck, predicts which ones will miss "
+            "their window, and lets an analyst try a fix in a simulated port "
+            "before the real one.",
+            ("Next.js", "FastAPI", "OR-Tools", "SimPy")),
+    Project("sonora", "Sonora", "sonora", None,
+            "Your music, made visible", "Real-time desktop music visualizer",
+            "Listens to whatever your PC is playing, breaks the sound down in "
+            "Rust, and turns it into three live WebGL scenes.",
             ("Rust", "Tauri 2", "WebGL 2", "WASAPI")),
     Project("vessel-dashboard", "Vessel Intelligence Dashboard",
-            "vessel-intelligence-dashboard",
-            "< 2 s", "Excel workbook to board-ready dashboard",
-            "One self-contained HTML file with zero network requests, so "
-            "confidential fleet reports never leave the browser.",
+            "vessel-intelligence-dashboard", None,
+            "Excel in, board report out", "Fleet dashboard in a single HTML file",
+            "Turns a vessel-employment workbook into an interactive dashboard "
+            "in seconds, with no server and no data ever leaving the browser.",
             ("JavaScript", "SheetJS", "single-file")),
     Project("frappe-invoicing", "Frappe Invoicing Platform",
-            "frappe-invoicing-platform",
-            "3 print formats", "tax invoice, credit note and receipt",
-            "ERPNext extension for service invoicing: VAT templates, reverse "
-            "charge, and numbering that survives migrations.",
+            "frappe-invoicing-platform", None,
+            "Invoices that do the tax math", "ERPNext invoicing extension",
+            "Adds VAT templates, a reverse-charge helper, and clean invoice, "
+            "credit-note and receipt layouts to ERPNext, with numbering that "
+            "survives migrations.",
             ("Python", "Frappe", "ERPNext")),
 ]
 
@@ -460,7 +478,7 @@ def build_banner(p):
                p["accent"], p["accent_soft"], rest=TYPING_REST),
     ]
     return svg(w, b["height"], "".join(body),
-               "{}, software engineer. {}".format(NAME, ". ".join(TYPING_LINES[1:])))
+               "{}. {}. {}".format(NAME, ROLE, ". ".join(TYPING_LINES)))
 
 
 def build_footer(p):
@@ -477,14 +495,16 @@ def build_footer(p):
 
 # ------------------------------------------------------------------ chips --
 
-CHIP_SIZE = 14.5    # label font size
-CHIP_H = 38
-CHIP_ICON = 19
-CHIP_PAD = 14
+# Sized so the longest stack row (seven pills, "Data and services") fits on
+# one line of the panel; test_stack_rows_fit_on_one_line holds it there.
+CHIP_SIZE = 13.5    # label font size
+CHIP_H = 36
+CHIP_ICON = 18
+CHIP_PAD = 12
 CHIP_LEAD = CHIP_PAD + CHIP_ICON + 10    # glyph plus the gap before the label
-CHIP_TAIL = 16
+CHIP_TAIL = 14
 CHIP_ARROW = 18     # extra room for the link arrow on social pills
-CHIP_GAP = 10
+CHIP_GAP = 8
 CHIP_ROW = CHIP_H + 10
 
 
@@ -540,9 +560,9 @@ def build_stack(p):
             x += cw + CHIP_GAP
         y += CHIP_H + 34
     h = y - 34 + pad
-    names = [label for _, items in STACK for label, _ in items]
-    return svg(w, h, panel(w, h, p) + "".join(body),
-               "Tools I use: " + ", ".join(names))
+    return svg(w, h, panel(w, h, p) + "".join(body), "Tools I use. " + " ".join(
+        "{}: {}.".format(heading, ", ".join(label for label, _ in items))
+        for heading, items in STACK))
 
 
 # --------------------------------------------------------------- activity --
@@ -557,7 +577,6 @@ query($login: String!, $after: String) {
       pageInfo { hasNextPage endCursor }
       nodes {
         name
-        stargazerCount
         languages(first: 12, orderBy: {field: SIZE, direction: DESC}) {
           edges { size node { name color } }
         }
@@ -567,9 +586,17 @@ query($login: String!, $after: String) {
 }
 """
 
-YEAR_FIELDS = ("{ totalCommitContributions contributionCalendar { "
-               "totalContributions weeks { contributionDays { date "
-               "contributionCount } } } }")
+YEAR_FIELDS = ("{ contributionCalendar { totalContributions weeks { "
+               "contributionDays { date contributionCount } } } }")
+
+# Markup, styling and templating stay out of the language mix: a page's HTML
+# and CSS say little about what was built, and they crowd out the code.
+MARKUP = frozenset({
+    "HTML", "CSS", "SCSS", "Sass", "Less", "Stylus", "PostCSS", "Markdown",
+    "MDX", "XML", "XSLT", "SVG", "TeX", "reStructuredText", "AsciiDoc",
+    "Handlebars", "Mustache", "EJS", "Pug", "Haml", "Slim", "Jinja", "Twig",
+    "Liquid", "Nunjucks", "Smarty", "Blade",
+})
 
 
 def graphql(query, variables):
@@ -630,7 +657,7 @@ def streaks(days, today=None):
 
 
 def fetch_stats(query=graphql, today=None):
-    """Totals, streaks, stars and language mix for USER's public work.
+    """Totals, streaks, active days and language mix for USER's public work.
 
     privacy: PUBLIC keeps private repositories out whoever's token runs this,
     so a local build shows what the workflow will publish. Two requests in
@@ -652,10 +679,9 @@ def fetch_stats(query=graphql, today=None):
     created = date.fromisoformat(user["createdAt"][:10])
 
     years = query(years_query(created, today), {"login": USER})["user"]
-    days, total, commits = {}, 0, 0
+    days, total = {}, 0
     for cc in years.values():
         total += cc["contributionCalendar"]["totalContributions"]
-        commits += cc["totalCommitContributions"]
         for week in cc["contributionCalendar"]["weeks"]:
             for d in week["contributionDays"]:
                 days[d["date"]] = d["contributionCount"]
@@ -666,6 +692,8 @@ def fetch_stats(query=graphql, today=None):
             continue    # this repository's own tooling is not the work it shows
         for edge in repo["languages"]["edges"]:
             name = edge["node"]["name"]
+            if name in MARKUP:
+                continue
             sizes[name] = sizes.get(name, 0) + edge["size"]
             colors[name] = edge["node"]["color"] or "#8B949E"
     grand = sum(sizes.values()) or 1
@@ -674,9 +702,7 @@ def fetch_stats(query=graphql, today=None):
     current, longest = streaks(days, today)
     year_ago = (today - timedelta(days=364)).isoformat()
     return {
-        "total": total, "commits": commits,
-        "stars": sum(r["stargazerCount"] for r in repos),
-        "repos": page["totalCount"],
+        "total": total, "repos": page["totalCount"],
         "active": sum(1 for d, n in days.items() if n > 0 and d >= year_ago),
         "current": current, "longest": longest, "since": created,
         "today": today,
@@ -713,26 +739,31 @@ def span(s, today):
 
 
 ACTIVITY_H = 262
-METRIC_Y = 98
+METRIC_Y = 100
 
 
 def build_activity(p, s):
+    """Four contribution figures over the top languages.
+
+    Four rather than six: stars and all-time commits were small numbers that
+    disagreed with the contribution total beside them. The public repository
+    count rides in the header instead of taking a tile.
+    """
     w, h, pad = PANEL_W, ACTIVITY_H, PANEL_PAD + 2
     body = [panel(w, h, p), eyebrow(pad, 40, "Contributions and streaks", p),
-            mono(w - pad, 40, "@" + USER, 12.5, p["muted"], anchor="end")]
+            mono(w - pad, 40, "@{} \u00b7 {} public repos".format(USER, s["repos"]),
+                 12.5, p["muted"], anchor="end")]
 
     cells = [
         (s["total"], "Contributions", "since " + day(s["since"]), True),
-        (s["current"].length, "Current streak", span(s["current"], s["today"]), True),
+        (s["active"], "Active days", "in the last year", True),
+        (s["current"].length, "Current streak", span(s["current"], s["today"]), False),
         (s["longest"].length, "Longest streak", span(s["longest"], s["today"]), False),
-        (s["active"], "Active days", "in the last year", False),
-        (s["commits"], "Commits", "all time", False),
-        (s["stars"], "Stars earned", "across {} public repos".format(s["repos"]), False),
     ]
     step = (w - 2 * pad) / float(len(cells))
     for i, (value, label, note, hot) in enumerate(cells):
         cx = pad + step * (i + 0.5)
-        body.append(sans(cx, METRIC_Y, "{:,}".format(value), 28,
+        body.append(sans(cx, METRIC_Y, "{:,}".format(value), 30,
                          p["accent"] if hot else p["text"], 700, "middle"))
         body.append(sans(cx, METRIC_Y + 22, label, 12.5, p["text"], 500, "middle"))
         body.append(sans(cx, METRIC_Y + 40, note, 11, p["muted"], None, "middle"))
@@ -768,9 +799,9 @@ def build_activity(p, s):
         body.append(mono(lx + 14, 243, label, 12, p["text"]))
         lx += 14 + tw + 24
     return svg(w, h, "".join(body),
-               "GitHub activity for {}: {:,} contributions, {} day current "
-               "streak, top languages {}".format(
-                   USER, s["total"], s["current"].length,
+               "GitHub activity for {}: {:,} contributions, {} active days in "
+               "the last year, top languages {}".format(
+                   USER, s["total"], s["active"],
                    ", ".join(n for n, _, _ in s["languages"])))
 
 
@@ -778,41 +809,87 @@ def build_activity(p, s):
 
 CARD_W, CARD_H = 440, 262
 CARD_PAD = 28
+CARD_ROOM = CARD_W - 2 * CARD_PAD
 BADGE_R = 13
+PILL_SIZE = 11
+PILL_H = 22
 TITLE_SIZE = 19
+TITLE_Y = 49
+TAGLINE_Y = 96
+WHAT_Y = 119
 DESC_SIZE = 12
-DESC_COLS = int((CARD_W - 2 * CARD_PAD) / (DESC_SIZE * MONO_ADVANCE))
+DESC_COLS = int(CARD_ROOM / (DESC_SIZE * MONO_ADVANCE))
 DESC_LINES = 3
-DESC_Y = 158
+DESC_Y = 153
 TAG_SIZE = 11
 TAG_H = 22
 TAG_Y = CARD_H - CARD_PAD - TAG_H + 4
-TITLE_ROOM = CARD_W - 2 * CARD_PAD - 2 * BADGE_R - 12
+
+# Helvetica widths run at or above Segoe UI and San Francisco; the slack
+# covers wider fallbacks such as Noto Sans.
+TAGLINE_SLACK = 1.08
+
+
+def tagline_size(projects):
+    """The one tagline size for every card: the largest, in half points, at
+    which the longest tagline still fits on a single line. A card never wraps
+    or shrinks its own, so the four read as a set."""
+    widest = max(sans_width(pr.tagline, 1, bold=True) for pr in projects)
+    return math.floor(CARD_ROOM / (widest * TAGLINE_SLACK) * 2) / 2.0
+
+
+TAGLINE_SIZE = tagline_size(PROJECTS)
+
+
+def status_pill(right, cy, text, p):
+    """A dot and a word in an outlined pill, right-aligned at `right`.
+    Returns (svg, width)."""
+    w = 11 + 6 + 6 + mono_width(text, PILL_SIZE) + 11
+    x = right - w
+    return (el("rect", x=x, y=cy - PILL_H / 2.0, width=w, height=PILL_H,
+               rx=PILL_H / 2.0, fill="none", stroke=p["accent"], stroke_opacity=0.55)
+            + el("circle", cx=x + 14, cy=cy, r=3, fill=p["accent"])
+            + mono(x + 23, cy + PILL_SIZE * 0.36, text, PILL_SIZE, p["accent"], 600),
+            w)
+
+
+def corner(project, p):
+    """The status pill, or for a linked card the arrow badge. Returns
+    (svg, width) so the title knows how much room it has."""
+    right, cy = CARD_W - CARD_PAD, 42
+    if project.status:
+        return status_pill(right, cy, project.status, p)
+    bx = right - BADGE_R
+    return (el("circle", cx=bx, cy=cy, r=BADGE_R, fill="none", stroke=p["accent"],
+               stroke_opacity=0.55) + arrow(bx, cy, 8, p["accent"]), 2 * BADGE_R)
+
+
+def title_room(project, p):
+    return CARD_ROOM - corner(project, p)[1] - 12
 
 
 def build_project(p, project):
     """One featured-work card: a machined shell round an inset panel, the
-    headline figure in the accent, the pitch, then the tags. A badge in the
-    corner says the card opens the repository.
+    name with its status or link badge, the tagline in the accent, what the
+    thing is, the pitch, then the tags.
 
     No entry animation: a rise-in that starts at opacity 0 leaves the card
     blank wherever animation does not run, and a blank card is worse than a
     still one.
     """
     w, h, x0 = CARD_W, CARD_H, CARD_PAD
-    bx, by = w - x0 - BADGE_R, 42
+    badge, _ = corner(project, p)
     body = [
         el("rect", x=0.5, y=0.5, width=w - 1, height=h - 1, rx=18,
            fill=p["surface"], stroke=p["line"]),
         el("rect", x=6, y=6, width=w - 12, height=h - 12, rx=13,
            fill=p["inset"], stroke=p["line"], stroke_opacity=0.6),
-        sans(x0, 49, project.name, fit(project.name, TITLE_SIZE, TITLE_ROOM, True),
+        sans(x0, TITLE_Y, project.name,
+             fit(project.name, TITLE_SIZE, title_room(project, p) / TAGLINE_SLACK, True),
              p["text"], 700),
-        el("circle", cx=bx, cy=by, r=BADGE_R, fill="none", stroke=p["accent"],
-           stroke_opacity=0.55),
-        arrow(bx, by, 8, p["accent"]),
-        sans(x0, 104, project.figure, 34, p["accent"], 700, spacing="-0.02em"),
-        sans(x0, 126, project.figure_label, 12.5, p["muted"]),
+        badge,
+        sans(x0, TAGLINE_Y, project.tagline, TAGLINE_SIZE, p["accent"], 700),
+        sans(x0, WHAT_Y, project.what, 12.5, p["muted"]),
     ]
     for i, line in enumerate(textwrap.wrap(project.desc, DESC_COLS)[:DESC_LINES]):
         body.append(mono(x0, DESC_Y + i * 18, line, DESC_SIZE, p["text"]))
@@ -827,22 +904,18 @@ def build_project(p, project):
         body.append(mono(tx + 10, TAG_Y + TAG_H / 2.0 + TAG_SIZE * 0.36, tag,
                          TAG_SIZE, p["muted"]))
         tx += tw + 8
-    return svg(w, h, "".join(body), "{}: {}, {}. {}".format(
-        project.name, project.figure, project.figure_label, project.desc))
+    return svg(w, h, "".join(body), card_alt(project))
 
 
-def build_spacer():
-    """Holds the empty grid slot beside an odd card. One pixel tall, so when
-    the cards stack on a phone it leaves no visible gap."""
-    return ('<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="1" '
-            'viewBox="0 0 {} 1" aria-hidden="true"/>'.format(CARD_W, CARD_W))
+def card_alt(project):
+    """The card's accessible name, which the README's alt text repeats."""
+    return "{}: {}. {}".format(project.name, project.tagline, project.desc)
 
 
 # -------------------------------------------------------------------- main --
 
 def assets(stats):
     """Every (file name, svg) the README needs. stats may be None."""
-    yield "project-spacer.svg", build_spacer()
     for suffix, p in THEMES.items():
         yield "banner{}.svg".format(suffix), build_banner(p)
         yield "footer{}.svg".format(suffix), build_footer(p)

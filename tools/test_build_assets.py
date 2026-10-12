@@ -25,13 +25,13 @@ TODAY = date(2026, 10, 12)
 LIGHT, DARK = b.THEMES[""], b.THEMES["-dark"]
 
 SAMPLE_STATS = {
-    "total": 1204, "commits": 873, "stars": 12, "repos": 6, "active": 187,
+    "total": 1204, "repos": 6, "active": 187,
     "current": b.Streak(4, date(2026, 10, 9), TODAY),
     "longest": b.Streak(19, date(2025, 12, 28), date(2026, 1, 15)),
     "since": date(2024, 10, 15), "today": TODAY,
-    "languages": [("TypeScript", 29.7, "#3178c6"), ("JavaScript", 27.0, "#f1e05a"),
-                  ("Rust", 12.4, "#dea584"), ("CSS", 8.7, "#663399"),
-                  ("Python", 7.4, "#3572A5")],
+    "languages": [("TypeScript", 33.2, "#3178c6"), ("JavaScript", 30.3, "#f1e05a"),
+                  ("Rust", 13.9, "#dea584"), ("Python", 8.3, "#3572A5"),
+                  ("GLSL", 5.2, "#5686a5")],
 }
 
 
@@ -275,24 +275,32 @@ def test_text_on_the_wave_meets_aa():
             assert worst >= 4.5, "%s %r drops to %.2f:1" % (name, text, worst)
 
 
-def test_brand_glyphs_reach_three_to_one():
-    """Every mark's fill or its outline reaches 3:1 against its pill, and the
-    outline is only used to rescue a pale brand on a light card."""
-    slugs = [s for _, items in b.STACK for _, s in items] + [s for _, _, s in b.SOCIAL]
-    for p in (LIGHT, DARK):
-        for bg in (p["inset"], p["surface"]):
-            for slug in slugs:
-                fill, outline = b.mark_colors(icons.brand(slug), bg)
-                best = max(b.contrast(fill, bg), b.contrast(outline or fill, bg))
-                assert best >= 3.0, (slug, bg, fill, outline)
-                if outline:
-                    assert not b.is_dark(bg) and fill == icons.brand(slug), slug
-    assert b.mark_colors("#000000", DARK["inset"])[0] != "#000000", "Rust vanished"
+def test_every_glyph_reads_against_its_pill():
+    """Every brand mark, in every built pill, in both themes, reaches the
+    same 4.5:1 as text against that pill's own fill. A pale brand on a light
+    pill may keep its colour only if its outline carries the contrast."""
+    assert b.MARK_MIN >= b.TEXT_MIN == 4.5
+    checked = 0
+    for suffix, p in b.THEMES.items():
+        docs = [b.build_stack(p)] + [b.build_social(p, label, slug)
+                                     for _, label, slug in b.SOCIAL]
+        for doc in docs:
+            for g in chips(parse(doc)):
+                pill = next(e for e in g if local(e) == "rect").get("fill")
+                mark = next(e for e in g if local(e) == "path")
+                fill, edge = mark.get("fill"), mark.get("stroke")
+                ratio = b.contrast(edge or fill, pill)
+                label = next(e for e in g if local(e) == "text").text
+                assert ratio >= b.MARK_MIN, "%s%s: %s glyph is %.2f:1 on %s" % (
+                    "dark " if suffix else "light ", label, edge or fill, ratio, pill)
+                if edge:
+                    assert not b.is_dark(pill), "%s: outlines are for light pills" % label
+                    assert b.luminance(fill) >= b.PALE, "%s: only pale brands keep their fill" % label
+                checked += 1
+    assert checked == 2 * (sum(len(items) for _, items in b.STACK) + len(b.SOCIAL))
+    assert b.mark_colors("#000000", DARK["inset"])[0] != "#000000", "Next.js vanished"
     assert b.mark_colors("#F7DF1E", LIGHT["inset"])[0] == "#F7DF1E", "JS lost its yellow"
     assert b.mark_colors("#3776AB", LIGHT["inset"]) == ("#3776AB", None), "a legible brand moved"
-    # The outline is drawn, not just computed.
-    frag, _ = b.chip(0, 0, "JavaScript", "javascript", LIGHT, LIGHT["inset"])
-    assert 'stroke="#' in frag and "non-scaling-stroke" in frag
 
 
 # ------------------------------------------------------------------ chips --
@@ -346,6 +354,17 @@ def test_stack_pills_do_not_overlap_or_leave_the_card():
         assert len(boxes) == sum(len(items) for _, items in b.STACK)
 
 
+def test_stack_rows_fit_on_one_line():
+    """Each heading's pills share one line; a wrapped row reads as a mistake."""
+    for p in (LIGHT, DARK):
+        rows = {}
+        for g in chips(parse(b.build_stack(p))):
+            rows.setdefault(g[0].get("y"), []).append(g)
+        assert [len(r) for r in rows.values()] == [len(items) for _, items in b.STACK], \
+            "a stack row wrapped: %s" % [len(r) for r in rows.values()]
+    assert [h for h, _ in b.STACK][0] == "Apps and interfaces", "apps lead the panel"
+
+
 # --------------------------------------------------------------- activity --
 
 def test_activity_card_fits():
@@ -361,9 +380,13 @@ def test_activity_card_fits():
         last = bars[-1]
         assert float(last.get("x")) + float(last.get("width")) >= right - 4, \
             "the language bar stops short of the card"
-        assert "1,204" in doc and "Other 14.8%" in doc
+        assert "1,204" in doc and "Other 9.1%" in doc and "6 public repos" in doc
+        figures = [t for t in root.iter() if local(t) == "text" and t.get("font-size") == "30"]
+        assert len(figures) == 4, "expected four headline figures"
+        for gone in ("Stars", "Commits", "Pull requests"):
+            assert gone not in doc, gone
         # Each caption fits its column.
-        step = (b.PANEL_W - 2 * (b.PANEL_PAD + 2)) / 6.0
+        step = (b.PANEL_W - 2 * (b.PANEL_PAD + 2)) / 4.0
         for t in root.iter():
             if local(t) == "text" and t.get("font-size") == "11":
                 assert b.sans_width(t.text, 11) * 1.08 <= step - 8, t.text
@@ -378,11 +401,11 @@ def test_activity_card_fits():
 
 def test_fetch_stats_offline():
     """Pagination, one request for every year, public-only, the profile
-    repository left out of the language mix, and the maths."""
+    repository and markup languages left out of the mix, and the maths."""
     calls = []
 
-    def repo(name, stars, *langs):
-        return {"name": name, "stargazerCount": stars, "languages": {"edges": [
+    def repo(name, *langs):
+        return {"name": name, "languages": {"edges": [
             {"size": size, "node": {"name": n, "color": c}} for n, size, c in langs]}}
 
     def day_list(year):
@@ -394,32 +417,35 @@ def test_fetch_stats_offline():
         calls.append(query)
         if "repositories" in query:
             assert "privacy: PUBLIC" in query and "isFork: false" in query
-            assert "pullRequests" not in query
+            assert "pullRequests" not in query and "stargazerCount" not in query
             first = variables["after"] is None
             return {"user": {
                 "createdAt": "2024-10-15T21:22:45Z",
                 "repositories": {
                     "totalCount": 4,
                     "pageInfo": {"hasNextPage": first, "endCursor": "abc"},
-                    "nodes": ([repo("sonora", 2, ("Rust", 300, "#dea584"), ("GLSL", 100, None)),
-                               repo(b.USER, 1, ("Python", 90000, "#3572A5"))]
-                              if first else [repo("app", 1, ("Python", 600, "#3572A5"))])}}}
+                    "nodes": ([repo("sonora", ("Rust", 300, "#dea584"), ("GLSL", 100, None),
+                                    ("CSS", 5000, "#663399"), ("HTML", 900, "#e34c26")),
+                               repo(b.USER, ("Python", 90000, "#3572A5"))]
+                              if first else [repo("app", ("Python", 600, "#3572A5"),
+                                                  ("SCSS", 70, "#c6538c"))])}}}
         years = re.findall(r"y(\d{4}): contributionsCollection", query)
         assert years == ["2024", "2025", "2026"], years
         assert '"2024-10-15T00:00:00Z"' in query and '"2026-10-12T23:59:59Z"' in query
+        assert "totalCommitContributions" not in query
         return {"user": {"y" + y: {
-            "totalCommitContributions": 10,
             "contributionCalendar": {"totalContributions": 20, "weeks": [
                 {"contributionDays": day_list(int(y))}]}} for y in years}}
 
     s = b.fetch_stats(fake, TODAY)
     assert len(calls) == 3, "expected 2 profile pages + 1 calendar request"
-    assert (s["total"], s["commits"], s["stars"], s["repos"]) == (60, 30, 4, 4)
+    assert (s["total"], s["repos"]) == (60, 4)
     assert s["active"] == 4, "only days inside the last year count"
     assert s["current"] == b.Streak(4, date(2026, 10, 8), date(2026, 10, 11))
     assert s["longest"].length == 9
-    assert [n for n, _, _ in s["languages"]] == ["Python", "Rust", "GLSL"]
-    assert abs(s["languages"][0][1] - 60.0) < 1e-9
+    assert [n for n, _, _ in s["languages"]] == ["Python", "Rust", "GLSL"], \
+        "markup must not reach the language mix"
+    assert abs(s["languages"][0][1] - 60.0) < 1e-9, "shares are of code only"
     assert s["languages"][2][2] == "#8B949E", "a null colour needs a fallback"
 
 
@@ -428,18 +454,57 @@ def test_fetch_stats_offline():
 def test_project_cards_fit():
     for project in b.PROJECTS:
         lines = b.textwrap.wrap(project.desc, b.DESC_COLS)
-        assert len(lines) <= b.DESC_LINES, "%s pitch is %d lines" % (project.key, len(lines))
-        assert b.sans_width(project.name, b.TITLE_SIZE, True) * 1.08 <= b.TITLE_ROOM, project.name
-        assert b.sans_width(project.figure, 34, True) <= b.CARD_W - 2 * b.CARD_PAD
-        assert b.sans_width(project.figure_label, 12.5) * 1.08 <= b.CARD_W - 2 * b.CARD_PAD
+        assert 2 <= len(lines) <= b.DESC_LINES, "%s pitch is %d lines" % (project.key, len(lines))
+        assert b.sans_width(project.what, 12.5) * b.TAGLINE_SLACK <= b.CARD_ROOM, project.what
         for p in (LIGHT, DARK):
+            room = b.title_room(project, p)
+            assert b.sans_width(project.name, b.TITLE_SIZE, True) * b.TAGLINE_SLACK <= room, \
+                "%s runs into its corner badge" % project.name
             root = parse(b.build_project(p, project))
-            tags = [r for r in root.iter() if local(r) == "rect" and r.get("height") == str(b.TAG_H)]
+            tags = [r for r in root.iter() if local(r) == "rect" and r.get("height") == str(b.TAG_H)
+                    and r.get("y") == str(b.TAG_Y)]
             assert len(tags) == len(project.tags), "%s dropped a tag" % project.key
             for r in tags:
                 assert float(r.get("x")) + float(r.get("width")) <= b.CARD_W - b.CARD_PAD
             last_desc = b.DESC_Y + (len(lines) - 1) * 18
             assert float(tags[0].get("y")) - last_desc >= 16, "tags crowd the pitch"
+
+
+def test_taglines_share_one_size_and_fit_one_line():
+    """One size for all four, the largest (in half points) at which the
+    longest tagline fits the card on a single line."""
+    size, room = b.TAGLINE_SIZE, b.CARD_ROOM
+    widths = [b.sans_width(pr.tagline, size, True) * b.TAGLINE_SLACK for pr in b.PROJECTS]
+    assert max(widths) <= room, "a tagline overflows at %.1f px" % size
+    assert max(b.sans_width(pr.tagline, size + 0.5, True) * b.TAGLINE_SLACK
+               for pr in b.PROJECTS) > room, "%.1f px is not the largest that fits" % size
+    assert 20 <= size <= 34, size
+    for p in (LIGHT, DARK):
+        for project in b.PROJECTS:
+            root = parse(b.build_project(p, project))
+            runs = [t for t in root.iter() if local(t) == "text" and t.text == project.tagline]
+            assert len(runs) == 1 and not list(runs[0]), "%s tagline is split" % project.key
+            assert float(runs[0].get("font-size")) == size, project.key
+            assert runs[0].get("fill") == p["accent"] and runs[0].get("font-weight") == "700"
+
+
+def test_status_pill_or_link_badge():
+    """A private, unfinished project says so in the corner; every other card
+    shows the arrow that says it opens the repository."""
+    for p in (LIGHT, DARK):
+        for project in b.PROJECTS:
+            doc = b.build_project(p, project)
+            root = parse(doc)
+            badge = [c for c in root.iter() if local(c) == "circle" and c.get("r") == str(b.BADGE_R)]
+            if project.status:
+                assert ">{}<".format(project.status) in doc, project.key
+                assert not badge, "%s has both a pill and a badge" % project.key
+            else:
+                assert project.repo and len(badge) == 1, project.key
+    berthiq = next(pr for pr in b.PROJECTS if pr.key == "berthiq")
+    assert berthiq.repo is None and berthiq.status == "in progress"
+    assert [pr.key for pr in b.PROJECTS] == ["berthiq", "sonora", "vessel-dashboard",
+                                             "frappe-invoicing"]
 
 
 # ------------------------------------------------------------------ assets --
@@ -454,9 +519,6 @@ def test_assets_are_wellformed_and_labelled():
         root = parse(doc)
         assert local(root) == "svg" and root.get("viewBox"), name
         assert not re.search(r"&(?!amp;|lt;|gt;|quot;|#)", doc), "%s has a raw &" % name
-        if name == "project-spacer.svg":
-            assert root.get("aria-hidden") == "true"
-            continue
         assert root.get("role") == "img" and root.get("aria-label"), name
         assert any(local(e) == "title" and e.text for e in root), name
 
@@ -477,7 +539,7 @@ def test_every_themed_asset_has_both_variants():
     for name in names:
         if name.endswith("-dark.svg"):
             assert name.replace("-dark.svg", ".svg") in names, name
-        elif name != "project-spacer.svg":
+        else:
             assert name.replace(".svg", "-dark.svg") in names, name
 
 
@@ -528,8 +590,11 @@ def test_readme_images_have_alt_text_and_both_themes():
     page.feed(read("README.md"))
     for img in page.imgs:
         assert "alt" in img, "an image has no alt attribute: %s" % img.get("src")
-        if not img["src"].endswith("project-spacer.svg"):
-            assert len(img["alt"]) >= 10, "alt text too thin: %r" % img["alt"]
+        assert len(img["alt"]) >= 10, "alt text too thin: %r" % img["alt"]
+    for project in b.PROJECTS:
+        card = RAW + "project-%s.svg" % project.key
+        alts = [img["alt"] for img in page.imgs if img["src"] == card]
+        assert alts == [b.card_alt(project)], "%s alt text drifted from the card" % project.key
     for pic in page.pictures:
         media = {s["media"]: s["srcset"] for s in pic["sources"]}
         dark, light = media["(prefers-color-scheme: dark)"], media["(prefers-color-scheme: light)"]
@@ -544,10 +609,40 @@ def test_readme_links_have_no_stray_whitespace():
     assert not re.search(r"<a [^>]*>\s+<picture", readme)
     assert not re.search(r"</picture>\s+</a>", readme)
     for project in b.PROJECTS:
+        card = "project-%s.svg" % project.key
+        line = next(ln for ln in readme.splitlines() if card in ln)
+        if project.repo is None:
+            assert "<a " not in line and "</a>" not in line, \
+                "%s is private; its card must not link anywhere" % project.key
+            continue
         href = "https://github.com/{}/{}".format(b.USER, project.repo)
-        m = re.search(r'<a href="%s"><picture>.*?</picture></a>' % re.escape(href), readme, re.S)
-        assert m, "%s card is not linked to its repository" % project.key
-        assert "project-%s.svg" % project.key in m.group(0)
+        m = re.search(r'<a href="%s"><picture>.*?</picture></a>' % re.escape(href), line)
+        assert m and card in m.group(0), "%s card is not linked to its repository" % project.key
+
+
+def test_cards_sit_in_a_two_by_two_grid():
+    readme = read("README.md")
+    grid = readme[readme.index("## Featured work"):readme.index("## Tools I use")]
+    rows = re.findall(r"<p align=\"center\">(.*?)</p>", grid, re.S)
+    keys = [re.findall(r'<img [^>]*src="[^"]*/project-([\w-]+)\.svg"', row) for row in rows]
+    assert keys == [["berthiq", "sonora"], ["vessel-dashboard", "frappe-invoicing"]], keys
+    assert "spacer" not in readme
+
+
+def test_copy_leads_with_apps_and_names_no_ai_tools():
+    """The reframe holds everywhere a reader sees words: the README and the
+    text inside every asset, including their accessible names."""
+    texts = [read("README.md")]
+    for doc in built().values():
+        root = parse(doc)
+        texts += [root.get("aria-label") or ""]
+        texts += [e.text or "" for e in root.iter() if local(e) in ("text", "title")]
+    blob = "\n".join(texts)
+    for phrase in ("backend", "data tooling", "data pipelines", "data-heavy"):
+        assert phrase not in blob.lower(), "still framed around %r" % phrase
+    assert not re.search(r"\b(AI|Claude|ChatGPT|Copilot|GPT|LLM)\b", blob), \
+        "the profile mentions an AI tool"
+    assert b.ROLE == "Software engineer building apps and tools"
 
 
 def test_readme_section_order():
