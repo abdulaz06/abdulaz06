@@ -196,7 +196,6 @@ TYPING_LINES = [
     "From port operations to real-time audio",
     "Open to SWE internships and full-time roles",
 ]
-TYPING_REST = 3     # the line a renderer without SMIL shows
 
 FOOTER_LINES = [
     "Thanks for scrolling this far",
@@ -204,7 +203,6 @@ FOOTER_LINES = [
     "Apps, tools, and everything behind them",
     "abdulazeemasharafali306@gmail.com",
 ]
-FOOTER_REST = 3
 
 # (file key, label, Simple Icons slug). The README wraps each in its link.
 SOCIAL = [
@@ -240,11 +238,19 @@ class Project(NamedTuple):
     tags: tuple
 
 
-# Descriptions are checked against each repo's README and code. Sonora
+# Descriptions are checked against each repo's README and code. Caravan's
+# README and case-study numbers give the this-or-that matchups, the
+# organizer's overlap view and the 13-friend trip it began with; Sonora
 # captures the default or a chosen output device; the dashboard makes no
 # network requests; the invoicing app re-creates its naming rules on every
 # migrate without resetting counters, and its reverse charge is a form helper.
 PROJECTS = [
+    Project("caravan", "Caravan", "caravan", None,
+            "Plan the trip together", "Group-trip planner, live on the web",
+            "Everyone builds their own version of the trip from this-or-that "
+            "picks, and the organizer sees where the group overlaps. 13 "
+            "friends used it for a real trip.",
+            ("Next.js", "TypeScript", "Supabase", "Playwright")),
     Project("berthiq", "BerthIQ", None, "in progress",
             "Test-drive the port first", "Port-call operations tool",
             "Finds where vessels get stuck, predicts which ones will miss "
@@ -343,67 +349,94 @@ def ms(v):
     return "{}ms".format(int(round(v)))
 
 
-def typing(lines, cx, baseline, size, color, caret_color, rest=0,
-           type_ms=58, erase_ms=24, hold_ms=2300, gap_ms=420):
+def frac(k):
+    """A keyTime: five places, so a 24 ms step in a 20 s cycle survives."""
+    return "{:.5f}".format(k).rstrip("0").rstrip(".") or "0"
+
+
+def typing(lines, cx, baseline, size, color, caret_color,
+           type_ms=58, erase_ms=24, hold_ms=2300, gap_ms=420, blink_ms=550):
     """A typewriter loop in SMIL, which <img>-embedded SVG runs (it never runs
     script).
 
-    Each line is revealed by a clip rect that steps one whole character at a
-    time (calcMode discrete), so a glyph is never shown half drawn, then
-    erased the same way. The lines are chained by syncbase: line i starts
-    when line i-1 finishes erasing, and line 0 also restarts after the last,
-    so there is no shared keyTimes table to keep in sync. One caret follows
-    the active line; it holds solid while typing and blinks while idle.
+    Every animation shares one cycle: the same dur, begin="0s" and
+    repeatCount="indefinite", with each line placed in the cycle by keyTimes
+    alone. Nothing is timed off another element: GitHub's iOS app ignores
+    syncbase begins and starts every line at once, which stacked them.
 
-    Without SMIL (link previews, static rasterisers) the base attributes
-    apply: line `rest` is shown in full with the caret after it, and every
-    other line is clipped to nothing.
+    Each line is a group holding its clipped text and its own caret, and a
+    discrete opacity gate shows the group only during that line's slot, so an
+    idle line and its caret are fully hidden. The clip steps one whole
+    character at a time, so a glyph is never half drawn; the caret follows
+    it, holds solid while typing and erasing, and blinks while the line rests.
+
+    Without SMIL the base attributes apply: line 0 in full with its caret
+    after it, every other group hidden.
     """
     adv = size * MONO_ADVANCE
     top, tall = baseline - size * 0.84, size * 1.14
-    last = len(lines) - 1
-    clips, texts, moves = [], [], []
+    spans = [(len(t) + 1) * (type_ms + erase_ms) + hold_ms + gap_ms for t in lines]
+    cycle = float(sum(spans))
+
+    def track(attr, frames):
+        """One discrete animation over the whole cycle. frames are (ms, value)
+        in time order, closed at the cycle's end; a later frame landing on the
+        same rounded instant replaces the earlier one."""
+        times, values = [], []
+        for t, v in frames + [(cycle, frames[-1][1])]:
+            k = round(t / cycle, 5)
+            if times and k <= times[-1]:
+                values[-1] = v
+                continue
+            times.append(k)
+            values.append(v)
+        return el("animate", attributeName=attr, begin="0s", dur=ms(cycle),
+                  repeatCount="indefinite", calcMode="discrete",
+                  keyTimes=";".join(frac(k) for k in times),
+                  values=";".join(num(v) for v in values))
+
+    groups, start = [], 0.0
     for i, line in enumerate(lines):
         n = len(line)
         width = n * adv
         x = cx - width / 2.0
-        steps = [num(k * adv) for k in range(n + 1)]
-        reach = [num(x + k * adv + 1) for k in range(n + 1)]
-        tdur, edur = (n + 1) * type_ms, (n + 1) * erase_ms
-        start = ("0s;e{}.end+{}ms".format(last, gap_ms) if i == 0
-                 else "e{}.end+{}ms".format(i - 1, gap_ms))
-        anim = (el("animate", id="t%d" % i, attributeName="width", begin=start,
-                   dur=ms(tdur), calcMode="discrete", values=";".join(steps),
-                   fill="freeze")
-                + el("animate", id="e%d" % i, attributeName="width",
-                     begin="t%d.end+%dms" % (i, hold_ms), dur=ms(edur),
-                     calcMode="discrete", values=";".join(steps[::-1]),
-                     fill="freeze"))
-        if i == rest and i != 0:
-            # Hide the resting line until its own turn once SMIL is running.
-            anim = el("set", attributeName="width", to="0", begin="0s",
-                      fill="freeze") + anim
-        clips.append(el("clipPath", el(
-            "rect", anim, x=x, y=top, height=tall,
-            width=width + adv if i == rest else 0), id="c%d" % i))
-        texts.append(el("text", esc(line), x=x, y=baseline,
-                        clip_path="url(#c%d)" % i, font_family=MONO,
-                        font_size=size, font_weight=500, fill=color,
-                        textLength=width, lengthAdjust="spacing",
-                        xml__space="preserve"))
-        for sync, dur, values in (("t%d" % i, tdur, reach),
-                                  ("e%d" % i, edur, reach[::-1])):
-            moves.append(el("animate", attributeName="x", begin=sync + ".begin",
-                            dur=ms(dur), calcMode="discrete",
-                            values=";".join(values), fill="freeze"))
-            moves.append(el("set", attributeName="opacity", to="1",
-                            begin=sync + ".begin", dur=ms(dur)))
-    blink = el("animate", attributeName="opacity", values="1;0",
-               calcMode="discrete", dur="1100ms", repeatCount="indefinite")
-    rest_end = cx + mono_width(lines[rest], size) / 2.0 + 1
-    caret = el("rect", blink + "".join(moves), x=rest_end, y=top, width=2,
-               height=tall, rx=1, fill=caret_color)
-    return el("defs", "".join(clips)) + "".join(texts) + caret
+        typed = start + (n + 1) * type_ms       # last character landed
+        erase = typed + hold_ms
+        erased = erase + (n + 1) * erase_ms
+        end = start + spans[i]
+        steps = ([(start + k * type_ms, k) for k in range(n + 1)]
+                 + [(erase + j * erase_ms, n - j) for j in range(n + 1)])
+        lead = [] if i == 0 else [(0.0, 0)]     # before this line's slot
+
+        blink = [(0.0, 1), (start, 1)]
+        for a, z in ((typed, erase), (erased, end)):
+            t, on = a, 1
+            while t < z:
+                blink.append((t, on))
+                on, t = 1 - on, t + blink_ms
+            blink.append((z, 1))
+
+        gate = [(0.0, 1 if i == 0 else 0)] + ([(start, 1)] if i else [])
+        if end < cycle:
+            gate.append((end, 0))
+
+        clip = el("clipPath", el(
+            "rect", track("width", lead + [(t, k * adv) for t, k in steps]),
+            x=x, y=top, height=tall, width=width + adv if i == 0 else 0),
+            id="c%d" % i)
+        text = el("text", esc(line), x=x, y=baseline, clip_path="url(#c%d)" % i,
+                  font_family=MONO, font_size=size, font_weight=500, fill=color,
+                  textLength=width, lengthAdjust="spacing", xml__space="preserve")
+        caret = el("rect",
+                   track("x", [(t, x + 1) for t, _ in lead]
+                         + [(t, x + k * adv + 1) for t, k in steps])
+                   + track("opacity", blink),
+                   x=x + (width if i == 0 else 0) + 1, y=top, width=2,
+                   height=tall, rx=1, fill=caret_color)
+        groups.append(el("g", track("opacity", gate) + clip + text + caret,
+                         class_="typing-line", opacity=None if i == 0 else 0))
+        start = end
+    return "".join(groups)
 
 
 # ------------------------------------------------------------------- wave --
@@ -475,7 +508,7 @@ def build_banner(p):
         sans(w / 2.0, b["role_y"], ROLE, b["role_size"], p["on_wave_muted"],
              500, "middle", "0.02em"),
         typing(TYPING_LINES, w / 2.0, b["typing_y"], b["typing_size"],
-               p["accent"], p["accent_soft"], rest=TYPING_REST),
+               p["accent"], p["accent_soft"]),
     ]
     return svg(w, b["height"], "".join(body),
                "{}. {}. {}".format(NAME, ROLE, ". ".join(TYPING_LINES)))
@@ -486,7 +519,7 @@ def build_footer(p):
     w = f["width"]
     body = [
         typing(FOOTER_LINES, w / 2.0, f["typing_y"], f["typing_size"],
-               p["muted"], p["accent_soft"], rest=FOOTER_REST),
+               p["muted"], p["accent_soft"]),
         el("g", wave(p, w, f["band"], flip=True),
            transform="translate(0,{})".format(f["height"] - f["band"])),
     ]

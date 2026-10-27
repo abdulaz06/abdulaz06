@@ -98,136 +98,119 @@ def test_streak_captions():
 
 # ----------------------------------------------------------------- typing --
 
-class Timeline:
-    """Just enough SMIL to play the typing loop: syncbase begins
-    (id.begin, id.end+Nms), discrete values, set, freeze, and the sandwich
-    rule that the latest-begun animation wins. Times are in ms."""
-
-    def __init__(self, root):
-        self.parent = {c: p for p in root.iter() for c in p}
-        self.anims = [e for e in root.iter() if local(e) in ("animate", "set")]
-        self.by_id = {a.get("id"): a for a in self.anims if a.get("id")}
-        self.begin = {}
-        for _ in range(len(self.anims) + 1):        # fixed point
-            for a in self.anims:
-                t = self._first_begin(a)
-                if t is not None:
-                    self.begin[a] = t
-        missing = [a.get("id") or a.get("attributeName") for a in self.anims
-                   if a not in self.begin]
-        assert not missing, "never begins: %s" % missing
-        # The loop closes where line 0 is re-triggered by the last erase.
-        restart = [s for s in self.by_id["t0"].get("begin").split(";") if s != "0s"]
-        assert len(restart) == 1, "line 0 must restart from the last line"
-        self.period = self._at(restart[0])
-
-    @staticmethod
-    def dur(a):
-        d = a.get("dur")
-        if d is None:
-            return float("inf")
-        return float(d[:-2]) if d.endswith("ms") else float(d[:-1]) * 1000
-
-    def _at(self, spec):
-        if spec == "0s":
-            return 0.0
-        m = re.fullmatch(r"(\w+)\.(begin|end)(?:\+(\d+)ms)?", spec)
-        assert m, "unsupported begin %r" % spec
-        ref = self.by_id[m.group(1)]
-        if ref not in self.begin:
-            return None
-        t = self.begin[ref] + (self.dur(ref) if m.group(2) == "end" else 0)
-        return t + float(m.group(3) or 0)
-
-    def _first_begin(self, a):
-        times = [self._at(s) for s in a.get("begin", "0s").split(";")]
-        times = [t for t in times if t is not None]
-        return min(times) if times else None
-
-    def value(self, target, attr, t):
-        # Stable sort: at equal begin times, the later element wins.
-        live = sorted(((self.begin[a], a) for a in self.anims
-                       if self.parent[a] is target and a.get("attributeName") == attr
-                       and self.begin[a] <= t), key=lambda pair: pair[0])
-        for start, a in reversed(live):
-            if local(a) == "set":
-                if t < start + self.dur(a) or a.get("fill") == "freeze":
-                    return float(a.get("to"))
-                continue
-            values = [float(v) for v in a.get("values").split(";")]
-            elapsed, d = t - start, self.dur(a)
-            if a.get("repeatCount") == "indefinite":
-                elapsed %= d
-            if elapsed < d:
-                return values[int(elapsed / d * len(values))]
-            if a.get("fill") == "freeze":
-                return values[-1]
-        return float(target.get(attr, "1" if attr == "opacity" else "0"))
+def typing_groups(root):
+    """(group, text, clip rect, caret) for each typing line, in order."""
+    clips = {c.get("id"): c[0] for c in root.iter() if local(c) == "clipPath"}
+    out = []
+    for g in root.iter():
+        if local(g) == "g" and g.get("class") == "typing-line":
+            text = next(e for e in g if local(e) == "text")
+            caret = next(e for e in g if local(e) == "rect")
+            clip = clips[re.search(r"#([\w-]+)", text.get("clip-path")).group(1)]
+            out.append((g, text, clip, caret))
+    return out
 
 
-def typing_parts(root):
-    clips = {c.get("id"): c[0] for c in root.iter() if local(c) == "clipPath"
-             and re.fullmatch(r"c\d+", c.get("id", ""))}
-    texts = [t for t in root.iter() if local(t) == "text" and t.get("clip-path")]
-    caret = next(r for r in root.iter() if local(r) == "rect" and r.get("width") == "2")
-    lines = []
-    for t in texts:
-        clip = clips[re.search(r"#(c\d+)", t.get("clip-path")).group(1)]
-        lines.append((t, clip, float(t.get("x")), float(t.get("textLength"))))
-    return lines, caret
+def own(e, attr):
+    """The <animate> directly on e for attr."""
+    return next(a for a in e if local(a) == "animate" and a.get("attributeName") == attr)
 
 
-def check_typing(doc, lines_text, rest):
-    root = parse(doc)
-    lines, caret = typing_parts(root)
-    assert [t.text for t, _, _, _ in lines] == lines_text
-    tl = Timeline(root)
-    assert tl.period > 0
-
-    # Static frame: only the resting line, with the caret after it.
-    for i, (_, clip, x, width) in enumerate(lines):
-        base = float(clip.get("width"))
-        assert (base >= width) if i == rest else base == 0, (i, base)
-    rx, rw = lines[rest][2], lines[rest][3]
-    assert abs(float(caret.get("x")) - (rx + rw + 1)) < 0.02
-
-    full = [False] * len(lines)
-    t = 0.0
-    while t < tl.period:
-        shown = []
-        for i, (_, clip, x, width) in enumerate(lines):
-            w = tl.value(clip, "width", t)
-            assert -0.01 <= w <= width + 0.01, (i, t, w)
-            if w > 0:
-                shown.append((i, x, width, w))
-            if abs(w - width) < 0.01:
-                full[i] = True
-        assert len(shown) <= 1, "two lines visible at %.0f ms: %s" % (t, shown)
-        if shown:
-            i, x, width, w = shown[0]
-            cx = tl.value(caret, "x", t)
-            assert abs(cx - (x + w + 1)) < 0.02, \
-                "caret at %.1f, line %d ends at %.1f (t=%.0f)" % (cx, i, x + w, t)
-            if 0 < w < width:
-                assert tl.value(caret, "opacity", t) == 1, \
-                    "caret blinked mid-word at %.0f ms" % t
-        t += 7.0
-    assert all(full), "lines never fully typed: %s" % [
-        lines_text[i] for i, f in enumerate(full) if not f]
+def cycle_ms(anim):
+    return float(anim.get("dur")[:-2])
 
 
-def test_banner_typing_loop():
-    check_typing(b.build_banner(LIGHT), b.TYPING_LINES, b.TYPING_REST)
+def at(anim, t):
+    """A discrete whole-cycle <animate>'s value t ms into the cycle."""
+    times = [float(k) for k in anim.get("keyTimes").split(";")]
+    values = [float(v) for v in anim.get("values").split(";")]
+    f = (t % cycle_ms(anim)) / cycle_ms(anim)
+    return values[max(i for i, k in enumerate(times) if k <= f + 1e-12)]
 
 
-def test_footer_typing_loop():
-    check_typing(b.build_footer(DARK), b.FOOTER_LINES, b.FOOTER_REST)
+TYPED = ((b.build_banner, b.TYPING_LINES), (b.build_footer, b.FOOTER_LINES))
+
+
+def test_typing_never_times_off_another_element():
+    """GitHub's iOS app ignores syncbase begins and starts every line at 0s,
+    which stacked them. So every animation in the banner and footer begins
+    at 0s, shares one cycle, and places itself with keyTimes alone."""
+    for build, lines in TYPED:
+        for p in (LIGHT, DARK):
+            root = parse(build(p))
+            durs = set()
+            for e in root.iter():
+                for attr in ("begin", "end"):
+                    v = e.get(attr)
+                    assert v is None or re.fullmatch(r"\d+(\.\d+)?(ms|s)?", v), \
+                        "%s=%r is timed off another element" % (attr, v)
+                assert local(e) != "set", "<set> is not cycle-placed"
+                if local(e) == "animate":
+                    assert e.get("begin") == "0s" and e.get("repeatCount") == "indefinite"
+                    assert e.get("id") is None
+                    durs.add(e.get("dur"))
+                    kt = [float(k) for k in e.get("keyTimes").split(";")]
+                    assert kt[0] == 0 and kt[-1] == 1, kt
+                    assert all(a < z for a, z in zip(kt, kt[1:])), "keyTimes must rise"
+                    assert len(kt) == len(e.get("values").split(";"))
+            assert len(durs) == 1, "animations do not share one cycle: %s" % durs
+            assert len(typing_groups(root)) == len(lines)
+
+
+def test_exactly_one_line_is_visible_at_a_time():
+    for build, lines in TYPED:
+        groups = typing_groups(parse(build(LIGHT)))
+        cycle = cycle_ms(own(groups[0][0], "opacity"))
+        seen, t = set(), 0.0
+        while t < cycle:
+            on = [i for i, (g, _, _, _) in enumerate(groups) if at(own(g, "opacity"), t) == 1]
+            assert len(on) == 1, "%d lines visible at %.0f ms" % (len(on), t)
+            seen.add(on[0])
+            t += 5.0
+        assert seen == set(range(len(lines))), "a line never got its slot"
+
+
+def test_typing_reveals_whole_characters_with_the_caret_in_step():
+    for build, lines in TYPED:
+        for i, (g, text, clip, caret) in enumerate(typing_groups(parse(build(DARK)))):
+            x, full = float(text.get("x")), float(text.get("textLength"))
+            adv = full / len(lines[i])
+            gate, width = own(g, "opacity"), own(clip, "width")
+            follow, blink = own(caret, "x"), own(caret, "opacity")
+            reached, t = False, 0.0
+            while t < cycle_ms(gate):
+                if at(gate, t) == 1:
+                    w = at(width, t)
+                    assert abs(w / adv - round(w / adv)) < 0.01, "half a glyph at %.0f ms" % t
+                    assert abs(at(follow, t) - (x + w + 1)) < 0.02, \
+                        "line %d caret off the text at %.0f ms" % (i, t)
+                    if 0 < w < full - 0.01:
+                        assert at(blink, t) == 1, "caret blinked mid-word at %.0f ms" % t
+                    reached = reached or abs(w - full) < 0.01
+                t += 5.0
+            assert reached, "%r never typed in full" % lines[i]
+
+
+def test_static_frame_shows_line_zero_only():
+    """With no SMIL at all the base attributes are the picture: line 0 typed
+    out with its caret after it, every other line and caret hidden."""
+    for build, lines in TYPED:
+        for p in (LIGHT, DARK):
+            for i, (g, text, clip, caret) in enumerate(typing_groups(parse(build(p)))):
+                x, full = float(text.get("x")), float(text.get("textLength"))
+                if i == 0:
+                    assert g.get("opacity") in (None, "1")
+                    assert float(clip.get("width")) >= full
+                    assert abs(float(caret.get("x")) - (x + full + 1)) < 0.02
+                else:
+                    assert g.get("opacity") == "0", "line %d shows without SMIL" % i
 
 
 def test_typing_lines_fit():
     for doc, width in ((b.build_banner(LIGHT), b.BANNER["width"]),
                        (b.build_footer(LIGHT), b.FOOTER["width"])):
-        for t, _, x, w in typing_parts(parse(doc))[0]:
+        for _, t, _, _ in typing_groups(parse(doc)):
+            x, w = float(t.get("x")), float(t.get("textLength"))
             assert x >= 40 and x + w + 3 <= width - 40, \
                 "%r runs from %.0f to %.0f" % (t.text, x, x + w)
 
@@ -503,8 +486,8 @@ def test_status_pill_or_link_badge():
                 assert project.repo and len(badge) == 1, project.key
     berthiq = next(pr for pr in b.PROJECTS if pr.key == "berthiq")
     assert berthiq.repo is None and berthiq.status == "in progress"
-    assert [pr.key for pr in b.PROJECTS] == ["berthiq", "sonora", "vessel-dashboard",
-                                             "frappe-invoicing"]
+    assert [pr.key for pr in b.PROJECTS] == ["caravan", "berthiq", "sonora",
+                                             "vessel-dashboard", "frappe-invoicing"]
 
 
 # ------------------------------------------------------------------ assets --
@@ -525,10 +508,12 @@ def test_assets_are_wellformed_and_labelled():
 
 def test_nothing_starts_invisible():
     """No entry animations from zero: whatever a renderer shows before (or
-    without) animation must already be the finished picture."""
+    without) animation must already be the finished picture. The typing
+    lines are the one exception, gated by design; the static frame test
+    holds line 0 visible."""
     for name, doc in built().items():
         for e in parse(doc).iter():
-            if local(e) in ("animate", "set"):
+            if local(e) in ("animate", "set") or e.get("class") == "typing-line":
                 continue
             for attr in ("opacity", "fill-opacity", "stroke-opacity"):
                 assert e.get(attr) not in ("0", "0.0"), "%s: %s=0 on <%s>" % (name, attr, local(e))
@@ -620,12 +605,15 @@ def test_readme_links_have_no_stray_whitespace():
         assert m and card in m.group(0), "%s card is not linked to its repository" % project.key
 
 
-def test_cards_sit_in_a_two_by_two_grid():
+def test_cards_sit_in_their_rows():
+    """Two pairs, then Frappe centred on its own row."""
     readme = read("README.md")
     grid = readme[readme.index("## Featured work"):readme.index("## Tools I use")]
     rows = re.findall(r"<p align=\"center\">(.*?)</p>", grid, re.S)
     keys = [re.findall(r'<img [^>]*src="[^"]*/project-([\w-]+)\.svg"', row) for row in rows]
-    assert keys == [["berthiq", "sonora"], ["vessel-dashboard", "frappe-invoicing"]], keys
+    assert keys == [["caravan", "sonora"], ["berthiq", "vessel-dashboard"],
+                    ["frappe-invoicing"]], keys
+    assert sorted(k for row in keys for k in row) == sorted(pr.key for pr in b.PROJECTS)
     assert "spacer" not in readme
 
 
