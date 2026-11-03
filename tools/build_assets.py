@@ -238,25 +238,27 @@ class Project(NamedTuple):
     tags: tuple
 
 
-# Descriptions are checked against each repo's README and code. Caravan's
+# Descriptions are checked against each repo's README and code. BerthIQ's
+# README gives the stuck-call replay, the missed-window risk board and the
+# simulated what-if; Caravan's
 # README and case-study numbers give the this-or-that matchups, the
 # organizer's overlap view and the 13-friend trip it began with; Sonora
 # captures the default or a chosen output device; the dashboard makes no
 # network requests; the invoicing app re-creates its naming rules on every
 # migrate without resetting counters, and its reverse charge is a form helper.
 PROJECTS = [
+    Project("berthiq", "BerthIQ", "berthiq", None,
+            "Test-drive the port first", "Port-call operations tool, live on the web",
+            "Finds where vessels get stuck, predicts which ones will miss "
+            "their window, and lets an analyst try a fix in a simulated port "
+            "before the real one.",
+            ("Next.js", "FastAPI", "OR-Tools", "SimPy")),
     Project("caravan", "Caravan", "caravan", None,
             "Plan the trip together", "Group-trip planner, live on the web",
             "Everyone builds their own version of the trip from this-or-that "
             "picks, and the organizer sees where the group overlaps. 13 "
             "friends used it for a real trip.",
             ("Next.js", "TypeScript", "Supabase", "Playwright")),
-    Project("berthiq", "BerthIQ", None, "in progress",
-            "Test-drive the port first", "Port-call operations tool",
-            "Finds where vessels get stuck, predicts which ones will miss "
-            "their window, and lets an analyst try a fix in a simulated port "
-            "before the real one.",
-            ("Next.js", "FastAPI", "OR-Tools", "SimPy")),
     Project("sonora", "Sonora", "sonora", None,
             "Your music, made visible", "Real-time desktop music visualizer",
             "Listens to whatever your PC is playing, breaks the sound down in "
