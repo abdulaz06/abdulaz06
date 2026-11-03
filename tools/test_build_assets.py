@@ -485,8 +485,8 @@ def test_status_pill_or_link_badge():
             else:
                 assert project.repo and len(badge) == 1, project.key
     berthiq = next(pr for pr in b.PROJECTS if pr.key == "berthiq")
-    assert berthiq.repo is None and berthiq.status == "in progress"
-    assert [pr.key for pr in b.PROJECTS] == ["caravan", "berthiq", "sonora",
+    assert berthiq.repo == "berthiq" and berthiq.status is None
+    assert [pr.key for pr in b.PROJECTS] == ["berthiq", "caravan", "sonora",
                                              "vessel-dashboard", "frappe-invoicing"]
 
 
@@ -606,13 +606,14 @@ def test_readme_links_have_no_stray_whitespace():
 
 
 def test_cards_sit_in_their_rows():
-    """Two pairs, then Frappe centred on its own row."""
+    """Three rows in PROJECTS order: BerthIQ leads, Frappe sits alone."""
     readme = read("README.md")
     grid = readme[readme.index("## Featured work"):readme.index("## Tools I use")]
     rows = re.findall(r"<p align=\"center\">(.*?)</p>", grid, re.S)
     keys = [re.findall(r'<img [^>]*src="[^"]*/project-([\w-]+)\.svg"', row) for row in rows]
-    assert keys == [["caravan", "sonora"], ["berthiq", "vessel-dashboard"],
+    assert keys == [["berthiq", "caravan"], ["sonora", "vessel-dashboard"],
                     ["frappe-invoicing"]], keys
+    assert [k for row in keys for k in row] == [pr.key for pr in b.PROJECTS]
     assert sorted(k for row in keys for k in row) == sorted(pr.key for pr in b.PROJECTS)
     assert "spacer" not in readme
 
